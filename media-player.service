@@ -10,6 +10,8 @@ Environment="DISPLAY=:0"
 Environment="XAUTHORITY=/home/pi/.Xauthority"
 EnvironmentFile=/etc/gdrive2video.env
 WorkingDirectory=%h/gdrive2video
+# Wake display and disable power management before starting
+ExecStartPre=/bin/sh -c 'DISPLAY=:0 xset dpms force on && DISPLAY=:0 xset -dpms && DISPLAY=:0 xset s off'
 ExecStart=/usr/bin/python3 %h/gdrive2video/media_player.py
 Restart=on-failure
 RestartSec=10
