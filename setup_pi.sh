@@ -97,11 +97,16 @@ sudo cp "${PROJECT_DIR}/${SYNC_SERVICE}" "${SERVICE_DEST}/${SYNC_SERVICE}"
 sudo cp "${PROJECT_DIR}/${SYNC_TIMER}" "${SERVICE_DEST}/${SYNC_TIMER}"
 sudo cp "${PROJECT_DIR}/${PLAYER_SERVICE}" "${SERVICE_DEST}/${PLAYER_SERVICE}"
 
-# Update User and Group in service files
+# Update User, Group, and paths in service files
 sudo sed -i "s/User=pi/User=${SERVICE_USER}/" "${SERVICE_DEST}/${SYNC_SERVICE}"
 sudo sed -i "s/Group=pi/Group=${SERVICE_GROUP}/" "${SERVICE_DEST}/${SYNC_SERVICE}"
+sudo sed -i "s|WorkingDirectory=%h/gdrive2video|WorkingDirectory=${PROJECT_DIR}|" "${SERVICE_DEST}/${SYNC_SERVICE}"
+sudo sed -i "s|ExecStart=/usr/bin/python3 %h/gdrive2video/|ExecStart=/usr/bin/python3 ${PROJECT_DIR}/|" "${SERVICE_DEST}/${SYNC_SERVICE}"
+
 sudo sed -i "s/User=pi/User=${SERVICE_USER}/" "${SERVICE_DEST}/${PLAYER_SERVICE}"
 sudo sed -i "s/Group=pi/Group=${SERVICE_GROUP}/" "${SERVICE_DEST}/${PLAYER_SERVICE}"
+sudo sed -i "s|WorkingDirectory=%h/gdrive2video|WorkingDirectory=${PROJECT_DIR}|" "${SERVICE_DEST}/${PLAYER_SERVICE}"
+sudo sed -i "s|ExecStart=/usr/bin/python3 %h/gdrive2video/|ExecStart=/usr/bin/python3 ${PROJECT_DIR}/|" "${SERVICE_DEST}/${PLAYER_SERVICE}"
 
 sudo chmod 0644 "${SERVICE_DEST}/${SYNC_SERVICE}"
 sudo chmod 0644 "${SERVICE_DEST}/${SYNC_TIMER}"
