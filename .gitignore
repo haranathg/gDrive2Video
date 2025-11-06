@@ -36,6 +36,7 @@ env/
 # Environment variables
 .env
 *.env
+!.env.sample
 
 # Media files (downloaded content)
 media/*

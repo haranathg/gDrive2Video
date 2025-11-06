@@ -169,3 +169,59 @@ gdrive2video/
 ```
 
 Happy streaming! Place images/videos in the shared Drive folder and they will appear on the Pi after the next sync cycle (default: every 5 minutes).
+
+## 8. Possible Future Enhancements
+
+### Raspberry Pi 3+ Optimizations
+
+The current setup works on all Raspberry Pi models (2, 3, 4, 5) without modifications. For better performance on newer models, consider these optional improvements:
+
+#### Hardware Video Acceleration
+
+Enable hardware decoding in VLC for smoother video playback:
+
+```python
+# In media_player.py, update VLC_BASE_CMD:
+VLC_BASE_CMD = [
+    "cvlc",
+    "--fullscreen",
+    "--no-video-title-show",
+    "--play-and-exit",
+    "--quiet",
+    "--avcodec-hw=any",  # Enable hardware decoding
+    "--vout=gles2",      # Use GLES2 for better performance
+]
+```
+
+#### Alternative: Use mpv for Better Performance
+
+On RPi3+, `mpv` often outperforms VLC:
+
+1. Install mpv: `sudo apt-get install mpv`
+2. Update `media_player.py`:
+
+```python
+MPV_BASE_CMD = [
+    "mpv",
+    "--fullscreen",
+    "--no-osc",
+    "--no-osd-bar",
+    "--hwdec=auto",      # Hardware decoding
+    "--vo=gpu",          # GPU video output
+    "--really-quiet",
+]
+```
+
+3. Replace `VLC_BASE_CMD` usage with `MPV_BASE_CMD` in the `play_videos()` function
+
+#### Higher Resolution Support
+
+RPi3+ models support 4K displays. The current code automatically adapts to your display resolution, so no changes are needed. Simply connect a 4K monitor and the system will use the full resolution.
+
+### Additional Features to Consider
+
+- **Web interface** for remote management and monitoring
+- **Scheduling** to display different content at different times
+- **Multi-zone support** for multiple displays
+- **Transition effects** between images
+- **Remote control** via REST API or mobile app
