@@ -134,7 +134,6 @@ def play_images(image_files: Sequence[Path], delay: int, use_framebuffer: bool =
             *FEH_BASE_CMD,
             "--slideshow-delay",
             str(delay),
-            "--cycle-once",
             *(str(p) for p in image_files),
         ]
         logging.info("Starting image slideshow with %d images.", len(image_files))
