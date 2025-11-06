@@ -6,9 +6,9 @@ SYNC_TIMER="gdrive-sync.timer"
 PLAYER_SERVICE="media-player.service"
 SERVICE_DEST="/etc/systemd/system"
 ENV_FILE="/etc/gdrive2video.env"
-SERVICE_USER="pi"
-SERVICE_GROUP="pi"
-MEDIA_DIR="/home/pi/media"
+SERVICE_USER="${USER:-pi}"
+SERVICE_GROUP="${USER:-pi}"
+MEDIA_DIR="/home/${SERVICE_USER}/media"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
@@ -92,9 +92,20 @@ sudo mkdir -p "${MEDIA_DIR}"
 sudo chown "${SERVICE_USER}:${SERVICE_GROUP}" "${MEDIA_DIR}"
 
 echo "Installing systemd services and timer..."
-sudo install -m 0644 "${PROJECT_DIR}/${SYNC_SERVICE}" "${SERVICE_DEST}/${SYNC_SERVICE}"
-sudo install -m 0644 "${PROJECT_DIR}/${SYNC_TIMER}" "${SERVICE_DEST}/${SYNC_TIMER}"
-sudo install -m 0644 "${PROJECT_DIR}/${PLAYER_SERVICE}" "${SERVICE_DEST}/${PLAYER_SERVICE}"
+# Copy and update service files with correct user
+sudo cp "${PROJECT_DIR}/${SYNC_SERVICE}" "${SERVICE_DEST}/${SYNC_SERVICE}"
+sudo cp "${PROJECT_DIR}/${SYNC_TIMER}" "${SERVICE_DEST}/${SYNC_TIMER}"
+sudo cp "${PROJECT_DIR}/${PLAYER_SERVICE}" "${SERVICE_DEST}/${PLAYER_SERVICE}"
+
+# Update User and Group in service files
+sudo sed -i "s/User=pi/User=${SERVICE_USER}/" "${SERVICE_DEST}/${SYNC_SERVICE}"
+sudo sed -i "s/Group=pi/Group=${SERVICE_GROUP}/" "${SERVICE_DEST}/${SYNC_SERVICE}"
+sudo sed -i "s/User=pi/User=${SERVICE_USER}/" "${SERVICE_DEST}/${PLAYER_SERVICE}"
+sudo sed -i "s/Group=pi/Group=${SERVICE_GROUP}/" "${SERVICE_DEST}/${PLAYER_SERVICE}"
+
+sudo chmod 0644 "${SERVICE_DEST}/${SYNC_SERVICE}"
+sudo chmod 0644 "${SERVICE_DEST}/${SYNC_TIMER}"
+sudo chmod 0644 "${SERVICE_DEST}/${PLAYER_SERVICE}"
 
 if [[ -n "${FOLDER_ID}" ]]; then
   echo "Writing environment configuration to ${ENV_FILE}..."
