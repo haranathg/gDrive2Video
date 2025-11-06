@@ -21,7 +21,7 @@ DEFAULT_MEDIA_DIR = Path(__file__).resolve().parent / "media"
 SLIDESHOW_DELAY = 8  # seconds
 DEFAULT_VIDEO_TIMEOUT = 300  # seconds if video duration probing fails
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
 
 FEH_BASE_CMD = [
