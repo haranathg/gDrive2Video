@@ -40,12 +40,12 @@ FBI_BASE_CMD = [
     "--autozoom",
 ]
 
-OMXPLAYER_BASE_CMD = [
-    "omxplayer",
-    "--no-osd",
-    "--loop",
-    "--aspect-mode",
-    "fill",
+VLC_BASE_CMD = [
+    "cvlc",  # Command-line VLC
+    "--fullscreen",
+    "--no-video-title-show",
+    "--play-and-exit",
+    "--quiet",
 ]
 
 
@@ -148,40 +148,18 @@ def play_videos(video_files: Sequence[Path]) -> None:
         return
 
     for video in video_files:
-        command = [*OMXPLAYER_BASE_CMD, str(video)]
+        command = [*VLC_BASE_CMD, str(video)]
         logging.info("Playing video: %s", video.name)
-        proc: subprocess.Popen | None = None
         try:
-            proc = subprocess.Popen(
-                command,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.STDOUT,
-            )
-            timeout = probe_video_duration(video) or DEFAULT_VIDEO_TIMEOUT
-            try:
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                logging.debug(
-                    "Stopping looped playback for %s after %s seconds.",
-                    video.name,
-                    timeout,
-                )
+            # VLC will play and exit automatically with --play-and-exit
+            subprocess.run(command, check=True, timeout=DEFAULT_VIDEO_TIMEOUT)
         except FileNotFoundError:
-            logging.error("omxplayer is not installed or not in PATH.")
+            logging.error("VLC is not installed or not in PATH. Install with: sudo apt-get install vlc")
             return
-        except subprocess.SubprocessError as exc:
+        except subprocess.TimeoutExpired:
+            logging.warning("Video playback timed out for %s after %s seconds.", video.name, DEFAULT_VIDEO_TIMEOUT)
+        except subprocess.CalledProcessError as exc:
             logging.error("Video playback failed for %s: %s", video, exc)
-        finally:
-            # Ensure the player is stopped before moving on.
-            if proc and proc.poll() is None:
-                try:
-                    if proc.stdin:
-                        proc.stdin.write(b"q")
-                        proc.stdin.flush()
-                    proc.wait(timeout=5)
-                except Exception:
-                    proc.kill()
 
 
 def playback_loop(media_dir: Path, delay: int, loop: bool = True, use_framebuffer: bool = False) -> None:

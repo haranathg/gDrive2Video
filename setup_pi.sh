@@ -67,7 +67,7 @@ if [[ "${USE_FRAMEBUFFER}" == "true" ]]; then
   sudo apt-get install -y \
     python3 \
     python3-pip \
-    omxplayer \
+    vlc \
     fbi \
     ffmpeg
 else
@@ -75,7 +75,7 @@ else
   sudo apt-get install -y \
     python3 \
     python3-pip \
-    omxplayer \
+    vlc \
     feh \
     ffmpeg
 fi
