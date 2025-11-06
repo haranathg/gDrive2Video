@@ -1,0 +1,19 @@
+[Unit]
+Description=Google Drive media loop player
+After=network-online.target remote-fs.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+EnvironmentFile=/etc/gdrive2video.env
+WorkingDirectory=%h/gdrive2video
+ExecStart=/usr/bin/python3 %h/gdrive2video/gdrive2video.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
