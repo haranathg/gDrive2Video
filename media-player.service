@@ -6,6 +6,8 @@ After=graphical.target
 Type=simple
 User=pi
 Group=pi
+Environment="DISPLAY=:0"
+Environment="XAUTHORITY=/home/pi/.Xauthority"
 EnvironmentFile=/etc/gdrive2video.env
 WorkingDirectory=%h/gdrive2video
 ExecStart=/usr/bin/python3 %h/gdrive2video/media_player.py
