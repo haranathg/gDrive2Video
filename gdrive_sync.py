@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 try:
     from google.oauth2 import service_account
@@ -45,7 +45,7 @@ class DriveFile:
     name: str
     modified_time: datetime
     mime_type: str
-    md5_checksum: str | None
+    md5_checksum: Optional[str]
 
     @property
     def extension(self) -> str:
@@ -74,7 +74,7 @@ def list_drive_files(service, folder_id: str) -> List[DriveFile]:
         "nextPageToken, files(id, name, mimeType, modifiedTime, md5Checksum)"
     )
     files: List[DriveFile] = []
-    page_token: str | None = None
+    page_token: Optional[str] = None
 
     while True:
         response = (

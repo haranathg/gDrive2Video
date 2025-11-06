@@ -13,7 +13,7 @@ import signal
 import subprocess
 import time
 from pathlib import Path
-from typing import List, Sequence
+from typing import List, Optional, Sequence
 
 # --- Configuration ---------------------------------------------------------
 
@@ -72,7 +72,7 @@ def categorize_media_files(media_dir: Path) -> tuple[List[Path], List[Path]]:
     return image_files, video_files
 
 
-def probe_video_duration(video_path: Path) -> float | None:
+def probe_video_duration(video_path: Path) -> Optional[float]:
     """Return the video duration in seconds if ffprobe is available."""
     try:
         result = subprocess.run(
