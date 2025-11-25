@@ -42,6 +42,9 @@ env/
 media/*
 !media/.gitkeep
 
+# Log files
+logs/
+
 # System files
 .DS_Store
 .DS_Store?
