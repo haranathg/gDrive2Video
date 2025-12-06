@@ -228,6 +228,7 @@ def log_to_spreadsheet(
     spreadsheet_id: str,
     downloaded: int,
     skipped: int,
+    deleted: int,
     total: int,
     errors: int = 0
 ) -> bool:
@@ -251,12 +252,13 @@ def log_to_spreadsheet(
         try:
             worksheet = spreadsheet.worksheet("Sync Log")
         except gspread.exceptions.WorksheetNotFound:
-            worksheet = spreadsheet.add_worksheet(title="Sync Log", rows=1000, cols=6)
+            worksheet = spreadsheet.add_worksheet(title="Sync Log", rows=1000, cols=7)
             # Add headers
             worksheet.append_row([
                 "Timestamp",
                 "Downloaded",
                 "Skipped",
+                "Deleted",
                 "Total Synced",
                 "Errors",
                 "Status"
@@ -270,6 +272,7 @@ def log_to_spreadsheet(
             timestamp,
             downloaded,
             skipped,
+            deleted,
             total,
             errors,
             status
@@ -283,7 +286,7 @@ def log_to_spreadsheet(
         return False
 
 
-def sync_drive_folder(service, folder_id: str, media_dir: Path) -> tuple[List[Path], int, int]:
+def sync_drive_folder(service, folder_id: str, media_dir: Path) -> tuple[List[Path], int, int, int]:
     logging.info("=" * 60)
     logging.info("SYNC STARTED - Drive folder %s -> %s", folder_id, media_dir)
     media_dir.mkdir(parents=True, exist_ok=True)
@@ -293,11 +296,18 @@ def sync_drive_folder(service, folder_id: str, media_dir: Path) -> tuple[List[Pa
         logging.info("Found %d files in Drive folder (excluding subfolders)", len(remote_files))
     except HttpError as error:
         logging.error("Google Drive API error: %s", error)
-        return [], 0, 0
+        return [], 0, 0, 0
+
+    # Build set of remote file names (excluding folders)
+    remote_file_names = {
+        entry.name for entry in remote_files
+        if entry.mime_type != "application/vnd.google-apps.folder"
+    }
 
     synced_paths: List[Path] = []
     downloaded_count = 0
     skipped_count = 0
+    deleted_count = 0
 
     for entry in remote_files:
         if entry.mime_type == "application/vnd.google-apps.folder":
@@ -319,14 +329,25 @@ def sync_drive_folder(service, folder_id: str, media_dir: Path) -> tuple[List[Pa
 
         synced_paths.append(target_path)
 
+    # Delete local files that no longer exist on Google Drive
+    for local_file in media_dir.iterdir():
+        if local_file.is_file() and local_file.name not in remote_file_names:
+            try:
+                local_file.unlink()
+                deleted_count += 1
+                logging.info("✗ Deleted (removed from Drive): %s", local_file.name)
+            except OSError as error:
+                logging.error("✗ Failed to delete %s: %s", local_file.name, error)
+
     logging.info("-" * 60)
     logging.info("SYNC SUMMARY:")
     logging.info("  Downloaded: %d files", downloaded_count)
     logging.info("  Skipped (up-to-date): %d files", skipped_count)
+    logging.info("  Deleted: %d files", deleted_count)
     logging.info("  Total synced: %d files", len(synced_paths))
     logging.info("=" * 60)
 
-    return synced_paths, downloaded_count, skipped_count
+    return synced_paths, downloaded_count, skipped_count, deleted_count
 
 
 def parse_args() -> argparse.Namespace:
@@ -406,7 +427,7 @@ def main() -> None:
     service = load_drive_service(args.credentials)
     logging.info("Starting sync from Google Drive folder %s", args.folder_id)
 
-    synced_paths, downloaded, skipped = sync_drive_folder(
+    synced_paths, downloaded, skipped, deleted = sync_drive_folder(
         service, args.folder_id, args.media_dir
     )
     if synced_paths:
@@ -423,6 +444,7 @@ def main() -> None:
             args.log_spreadsheet_id,
             downloaded,
             skipped,
+            deleted,
             len(synced_paths),
             errors=0  # Could track errors if needed
         )
