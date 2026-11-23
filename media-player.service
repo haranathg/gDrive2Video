@@ -1,22 +1,23 @@
+# Installed by setup_pi.sh, which replaces @USER@ and @PROJECT_DIR@.
 [Unit]
-Description=Media player service for digital signage
-After=graphical.target
+Description=gdrive2video media player (fullscreen loop on HDMI, no desktop)
+After=systemd-user-sessions.service local-fs.target
+# Never give up restarting.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-User=pi
-Group=pi
-Environment="DISPLAY=:0"
-Environment="XAUTHORITY=/home/pi/.Xauthority"
-EnvironmentFile=/etc/gdrive2video.env
-WorkingDirectory=%h/gdrive2video
-# Wake display and disable power management before starting
-ExecStartPre=/bin/sh -c 'DISPLAY=:0 xset dpms force on && DISPLAY=:0 xset -dpms && DISPLAY=:0 xset s off'
-ExecStart=/usr/bin/python3 %h/gdrive2video/media_player.py
-Restart=on-failure
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
+User=@USER@
+Group=@USER@
+# video/render: draw to the screen via DRM; audio: HDMI sound for videos.
+SupplementaryGroups=video render audio
+EnvironmentFile=-/etc/gdrive2video.env
+WorkingDirectory=@PROJECT_DIR@
+# Playlist + mpv socket live on tmpfs (/run/media-player), not the SD card.
+RuntimeDirectory=media-player
+ExecStart=/usr/bin/python3 @PROJECT_DIR@/media_player.py
+Restart=always
+RestartSec=5
 
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target

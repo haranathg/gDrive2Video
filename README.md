@@ -1,227 +1,97 @@
 # gdrive2video
 
-Play a fullscreen slideshow of images and loop videos from a Google Drive folder on a Raspberry Pi connected over HDMI. The project is split into two separate components:
-
-1. **gdrive_sync.py** - A sync script that downloads media from Google Drive to a local folder (runs periodically via systemd timer)
-2. **media_player.py** - A player module that continuously displays and loops through the local media files
-
-## Features
-- **Sync script** checks Google Drive folder periodically (default: every 5 minutes) and downloads new/updated files
-- **Media player** runs continuously, playing images as a slideshow (8s per slide) and videos in loop mode
-- Separation of concerns: sync can run independently from playback
-- Ships with systemd units for automatic start on boot
-
-## Architecture
-
-The new architecture separates download and playback:
+Turns a Raspberry Pi plugged into a TV into a digital sign. It shows the images and videos from a Google Drive folder, fullscreen, on a loop. Drop files into the Drive folder and they appear on the TVs within about 5 minutes. Delete them from Drive and they disappear from the TVs.
 
 ```
-┌─────────────────────┐         ┌──────────────────┐
-│  Google Drive       │         │  Raspberry Pi    │
-│  ┌──────────────┐   │         │                  │
-│  │ Media Folder │───┼────────▶│  gdrive_sync.py  │
-│  └──────────────┘   │  Timer  │        ↓         │
-└─────────────────────┘  (5min) │   ./media/       │
-                                 │        ↓         │
-                                 │  media_player.py │
-                                 │        ↓         │
-                                 │   [Display]      │
-                                 └──────────────────┘
+Google Drive folder ──(every 5 min)──▶ gdrive_sync.py ──▶ media/ ──▶ media_player.py ──▶ mpv ──▶ HDMI
 ```
 
-## 1. Prepare Google Drive Access
-1. Visit the [Google Cloud Console](https://console.cloud.google.com/) and create/select a project.
-2. Enable the **Google Drive API** (`APIs & Services` → `Enable APIs and Services`).
-3. Create a **service account** (`IAM & Admin` → `Service Accounts`) and download its JSON key. Rename the file to `credentials.json`.
-4. Share the Drive folder that will contain your media with the service account email address (e.g. `my-service-account@my-project.iam.gserviceaccount.com`) and give it at least Viewer access.
+| File | What it does |
+|---|---|
+| `gdrive_sync.py` | Mirrors the Drive folder into the local `media/` folder. It's run every 5 minutes by `gdrive-sync.timer`. It can also log each run to a Google Sheet. |
+| `media_player.py` | Keeps one fullscreen `mpv` running, looping all images (8 s each) and then all videos. It reloads when `media/` changes. |
+| `setup_pi.sh` | Run **on the Pi**. It installs or updates everything and applies the reliability settings below. It's safe to re-run. |
+| `deploy_to_rpi.sh` | Run **on your Mac**. It copies the project and credentials to the Pi, and with `--setup` it also runs setup there. |
+| `diagnose_pi.sh` | Health check on the Pi: services, logs, display, power and an SD-card read test. |
+| `*.service`, `*.timer` | systemd unit templates. `setup_pi.sh` fills in the user and path. |
 
-## 2. Deploy to the Raspberry Pi
-1. Copy this repository to the Pi:
+**There's no desktop.** The Pi boots straight to the player, and mpv draws directly to the screen through DRM/KMS. An earlier version ran on the LXDE desktop, so when the desktop's X server broke, the TVs just showed the desktop.
+
+## Setting up a Pi (new SD card)
+
+1. **Flash the card** with [Raspberry Pi Imager](https://www.raspberrypi.com/software/):
+   - OS: **Raspberry Pi OS Lite**. Use the 32-bit version for a Pi 2 and 64-bit for a Pi 3/4/5.
+   - Click *Edit settings* and set these:
+     - hostname `rpi-video`
+     - username and password (for example `srisai`)
+     - Wi-Fi network and country
+     - timezone
+   - Under *Services*, enable SSH and paste your Mac's public key (`cat ~/.ssh/id_ed25519.pub`).
+   - Use a "High Endurance" card (SanDisk High Endurance or Samsung PRO Endurance). Signage runs 24/7 and wears out ordinary cards.
+2. **Boot the Pi** on the network and wait about 2 minutes. Check that `ping rpi-video.local` gets a reply.
+3. **On the Mac**, in this folder:
+   - Make sure `.env` has `RPI_USER`, `RPI_HOST=rpi-video.local`, `GDRIVE_FOLDER_ID`, `LOG_SPREADSHEET_ID` and `CREDENTIALS_PATH`. See `.env.sample`.
+   - Run:
    ```bash
-   scp -r gdrive2video pi@raspberrypi.local:/home/pi/
+   ./deploy_to_rpi.sh --setup
    ```
-2. Copy `credentials.json` into the project directory on the Pi:
-   ```bash
-   scp credentials.json pi@raspberrypi.local:/home/pi/gdrive2video/
-   ```
-3. SSH into the Pi and run the setup helper:
-   ```bash
-   cd /home/pi/gdrive2video
-   chmod +x setup_pi.sh
-   ./setup_pi.sh --folder-id YOUR_DRIVE_FOLDER_ID
-   ```
-   The script will:
-   - Update apt and install `python3`, `pip`, `omxplayer`, `feh`, and `ffmpeg`
-   - Install the required Python libraries (`google-api-python-client`, `google-auth-httplib2`, `google-auth-oauthlib`)
-   - Create `/home/pi/media/` and ensure the `pi` user owns it
-   - Install both systemd services and timer, enable and start them
+   This takes 10–30 minutes the first time on a Pi 2 (OS updates and Python packages).
+4. Reboot when it asks (`ssh rpi-video.local sudo reboot`). The TV should show the slideshow about 1 minute after boot.
 
-If you prefer manual setup, create `/etc/gdrive2video.env`:
+**To update code later**, run `./deploy_to_rpi.sh` for code only, or `./deploy_to_rpi.sh --setup` to also patch the OS.
+
+### What `setup_pi.sh` configures
+- OS patches (`apt full-upgrade`) and automatic Debian security updates (`unattended-upgrades`).
+- `mpv`, plus a Python virtualenv (`.venv`) with the packages in `requirements.txt`.
+- `/etc/gdrive2video.env`: the folder ID, Sheet ID, credentials path and media folder.
+- The services `media-player.service` (always restarts) and `gdrive-sync.timer`. It also removes old cron sync entries.
+- Boots to the console with no desktop and no login prompt on the TV, and stops the screen from blanking.
+- **Hardware watchdog**: if the Pi ever hangs, it reboots itself after about 15 seconds.
+- **Less SD-card wear**: the journal is capped at 50 MB, the swap file is off, sync logs rotate at 1 MB, and the player's temp files live in RAM.
+
+## Day-to-day
+
+| Task | Command (on the Pi) |
+|---|---|
+| Health check | `~/gdrive2video/diagnose_pi.sh`, or from the Mac `./deploy_to_rpi.sh --diagnose` |
+| Player status and logs | `systemctl status media-player` / `journalctl -u media-player -f` |
+| Sync logs | `journalctl -u gdrive-sync -f`, or `logs/sync.log` |
+| Sync now | `sudo systemctl start gdrive-sync` |
+| Restart player | `sudo systemctl restart media-player` |
+| Change settings | edit `/etc/gdrive2video.env`, then `sudo systemctl restart media-player` |
+
+Settings in `/etc/gdrive2video.env`:
+
+| Setting | Meaning |
+|---|---|
+| `GDRIVE_FOLDER_ID` | The Drive folder to mirror. |
+| `LOG_SPREADSHEET_ID` | Optional Google Sheet for sync logs. It gets one row per sync, including the Pi's hostname. |
+| `SLIDESHOW_DELAY` | Seconds each image stays on screen. |
+| `MEDIA_DIR`, `LOG_DIR`, `CREDENTIALS_PATH` | Local paths. |
+| `ALLOW_EMPTY_SYNC=true` | Lets an empty Drive folder clear the screens. By default, if Drive shows the folder as empty, the Pi keeps its current files. That usually means the folder stopped being shared with the service account. |
+| `MPV_VO`, `MPV_HWDEC`, `MPV_EXTRA_ARGS` | mpv tuning. For example `MPV_EXTRA_ARGS=--volume=50`, or `--no-audio` to mute videos. |
+
+## Troubleshooting
+
+Start with `diagnose_pi.sh`, then check these:
+
+- **The TV shows the desktop or a login prompt.** The player isn't holding the screen. Run `./setup_pi.sh --no-upgrade` and reboot.
+- **The TV shows "no signal" or the wrong resolution.** Turn the TV on, set it to the right input, and run `sudo systemctl restart media-player`. The player uses the first connected HDMI port.
+- **Things crash randomly** (Python or X segfaults, garbled config files). Check the *SD card health* section of `diagnose_pi.sh`. If reads of the same file differ, the SD card (or the card slot) is failing, and the only fix is a new card. This happened in Nov 2026. On a Pi 2, also suspect the Pi itself.
+- **`throttled=0x50005` (or anything other than `0x0`).** The power supply is too weak. Use the official 2.5 A / 3 A supply. Under-voltage also corrupts SD cards.
+- **New files don't appear.** Check that the Drive folder is still shared with the service account email (in `credentials.json`, `client_email`). Then check `journalctl -u gdrive-sync`.
+- **Videos stutter on a Pi 2.** Re-encode them to H.264 at 1080p or lower (or 720p) and 30 fps. A Pi 3B+ or 4 handles video much better.
+
+## Local testing (Mac)
+
 ```bash
-sudo tee /etc/gdrive2video.env >/dev/null <<'EOF'
-GDRIVE_FOLDER_ID=YOUR_DRIVE_FOLDER_ID
-MEDIA_DIR=/home/pi/media
-SLIDESHOW_DELAY=8
-EOF
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python gdrive_sync.py --media-dir /tmp/media --log-spreadsheet-id ""   # reads .env
+brew install mpv && MPV_VO=gpu python3 media_player.py --media-dir /tmp/media
 ```
 
-Then install and enable the services:
-```bash
-sudo cp gdrive-sync.service gdrive-sync.timer media-player.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now gdrive-sync.timer
-sudo systemctl enable --now media-player.service
-```
+## Google Drive access (one-time)
 
-For local testing you can also copy the provided `.env` file, populate `GDRIVE_FOLDER_ID`, and point `CREDENTIALS_PATH` at your key file:
-```bash
-set -a
-source .env
-set +a
-# Test sync
-python3 gdrive_sync.py --verbose
-# Test player
-python3 media_player.py --once --verbose
-```
-
-## 3. Service Control
-
-### Sync Service
-- Check timer status: `sudo systemctl status gdrive-sync.timer`
-- Check last sync: `sudo systemctl status gdrive-sync.service`
-- View sync logs: `journalctl -u gdrive-sync.service -f`
-- Manually trigger sync: `sudo systemctl start gdrive-sync.service`
-
-### Player Service
-- Check status: `sudo systemctl status media-player.service`
-- View logs: `journalctl -u media-player.service -f`
-- Restart player: `sudo systemctl restart media-player.service`
-
-Edit `/etc/gdrive2video.env` to change configuration, then restart the affected service.
-
-## 4. Running Manually (Optional)
-
-### Sync Script
-Run a one-time sync:
-```bash
-python3 gdrive_sync.py --folder-id YOUR_DRIVE_FOLDER_ID --verbose
-```
-
-Useful flags:
-- `--media-dir /path/to/dir` - Override the media cache location
-- `--credentials /path/to/creds.json` - Use different credentials
-
-### Media Player
-Run the player once through the media:
-```bash
-python3 media_player.py --once --verbose
-```
-
-Run the player in continuous loop mode:
-```bash
-python3 media_player.py --verbose
-```
-
-Useful flags:
-- `--media-dir /path/to/dir` - Override the media directory
-- `--slideshow-delay 5` - Adjust image display time (seconds)
-- `--once` - Play through media once and exit (no loop)
-
-## 5. Adjusting Sync Frequency
-
-The default sync interval is 5 minutes. To change this, edit [gdrive-sync.timer](gdrive-sync.timer#L9) and modify the `OnUnitActiveSec` value:
-
-```ini
-[Timer]
-OnBootSec=1min
-OnUnitActiveSec=10min  # Change to desired interval
-Persistent=true
-```
-
-Then reload and restart:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart gdrive-sync.timer
-```
-
-## 6. Troubleshooting
-- Ensure the Pi is connected to the internet; the first sync downloads all media
-- If the service account cannot see your files, confirm the Drive folder is shared with it
-- `omxplayer` requires the HDMI display to be active; ensure the monitor/TV is on before the player service starts
-- The player attempts to read video length with `ffprobe`; if playback does not advance, install `ffmpeg` (handled by `setup_pi.sh`)
-- Files deleted from Drive are not removed locally; clear them manually from the media directory if needed
-
-## 7. File Structure
-
-```
-gdrive2video/
-├── gdrive_sync.py           # Sync script (downloads from Drive)
-├── media_player.py          # Player module (displays media)
-├── gdrive-sync.service      # Systemd service for sync
-├── gdrive-sync.timer        # Systemd timer for periodic sync
-├── media-player.service     # Systemd service for player
-├── setup_pi.sh              # Setup script for Raspberry Pi
-├── credentials.json         # Google service account credentials
-├── .env                     # Environment variables (local testing)
-├── media/                   # Local media cache directory
-└── archive/                 # Old combined script (deprecated)
-    └── gdrive2video.py
-```
-
-Happy streaming! Place images/videos in the shared Drive folder and they will appear on the Pi after the next sync cycle (default: every 5 minutes).
-
-## 8. Possible Future Enhancements
-
-### Raspberry Pi 3+ Optimizations
-
-The current setup works on all Raspberry Pi models (2, 3, 4, 5) without modifications. For better performance on newer models, consider these optional improvements:
-
-#### Hardware Video Acceleration
-
-Enable hardware decoding in VLC for smoother video playback:
-
-```python
-# In media_player.py, update VLC_BASE_CMD:
-VLC_BASE_CMD = [
-    "cvlc",
-    "--fullscreen",
-    "--no-video-title-show",
-    "--play-and-exit",
-    "--quiet",
-    "--avcodec-hw=any",  # Enable hardware decoding
-    "--vout=gles2",      # Use GLES2 for better performance
-]
-```
-
-#### Alternative: Use mpv for Better Performance
-
-On RPi3+, `mpv` often outperforms VLC:
-
-1. Install mpv: `sudo apt-get install mpv`
-2. Update `media_player.py`:
-
-```python
-MPV_BASE_CMD = [
-    "mpv",
-    "--fullscreen",
-    "--no-osc",
-    "--no-osd-bar",
-    "--hwdec=auto",      # Hardware decoding
-    "--vo=gpu",          # GPU video output
-    "--really-quiet",
-]
-```
-
-3. Replace `VLC_BASE_CMD` usage with `MPV_BASE_CMD` in the `play_videos()` function
-
-#### Higher Resolution Support
-
-RPi3+ models support 4K displays. The current code automatically adapts to your display resolution, so no changes are needed. Simply connect a 4K monitor and the system will use the full resolution.
-
-### Additional Features to Consider
-
-- **Web interface** for remote management and monitoring
-- **Scheduling** to display different content at different times
-- **Multi-zone support** for multiple displays
-- **Transition effects** between images
-- **Remote control** via REST API or mobile app
+1. In Google Cloud Console, enable the **Google Drive API** (and the **Sheets API** if you use Sheet logging).
+2. Create a **service account** and download its JSON key. That key is the credentials file.
+3. Share the Drive folder, and the log Sheet if you use one, with the service account's email address.

@@ -7,12 +7,15 @@ to keep a local media directory in sync with a Google Drive folder.
 """
 
 import argparse
-import io
+import fcntl
 import logging
+import logging.handlers
 import os
+import socket
+import tempfile
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -52,8 +55,10 @@ DEFAULT_FOLDER_ID = "REPLACE_ME_WITH_FOLDER_ID"
 DEFAULT_MEDIA_DIR = Path(__file__).resolve().parent / "media"
 DEFAULT_CREDENTIALS_PATH = Path(__file__).resolve().parent / "credentials.json"
 DEFAULT_LOG_DIR = Path(__file__).resolve().parent / "logs"
-DEFAULT_LOG_RETENTION_DAYS = 3
-DEFAULT_HISTORY_RETENTION_DAYS = 90
+LOG_MAX_BYTES = 1_000_000  # rotate sync.log at ~1 MB ...
+LOG_BACKUP_COUNT = 5  # ... and keep 5 old files (~6 MB total)
+API_RETRIES = 3  # retries for transient Google API / network errors
+LOCK_FILE = Path(tempfile.gettempdir()) / "gdrive_sync.lock"
 
 
 @dataclass
@@ -72,73 +77,41 @@ class DriveFile:
 
 
 def configure_logging(verbose: bool, log_dir: Optional[Path] = None) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
+    """Log to stderr (the systemd journal) and to a size-capped rotating file.
 
-    handlers = []
+    Older versions rewrote the whole log file on every run to trim old lines,
+    which wrote gigabytes a day to the SD card. Rotation only appends.
+    """
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    handlers: List[logging.Handler] = [logging.StreamHandler()]
 
-    # Console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(
-        logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-    )
-    handlers.append(console_handler)
-
-    # File handlers if log_dir is provided
     if log_dir:
-        log_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            handlers.append(
+                logging.handlers.RotatingFileHandler(
+                    log_dir / "sync.log", maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT
+                )
+            )
+        except OSError as exc:
+            print(f"Cannot write logs to {log_dir}: {exc}")
 
-        # Current log (with retention)
-        current_log = log_dir / "sync_current.log"
-        current_handler = logging.FileHandler(current_log, mode='a')
-        current_handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-        )
-        handlers.append(current_handler)
-
-        # Full history log
-        history_log = log_dir / "sync_history.log"
-        history_handler = logging.FileHandler(history_log, mode='a')
-        history_handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-        )
-        handlers.append(history_handler)
-
-    logging.basicConfig(
-        level=level,
-        handlers=handlers,
-        force=True,
-    )
+    for handler in handlers:
+        handler.setFormatter(formatter)
+    logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO, handlers=handlers, force=True)
+    # Silence googleapiclient's noisy discovery-cache warnings.
+    logging.getLogger("googleapiclient.discovery_cache").setLevel(logging.ERROR)
 
 
-def cleanup_log_file(log_file: Path, retention_days: int, log_name: str) -> None:
-    """Remove log entries older than retention_days from a log file."""
-    if not log_file.exists():
-        return
-
-    cutoff_time = datetime.now() - timedelta(days=retention_days)
-    temp_log = log_file.parent / f"{log_file.name}.tmp"
-
+def acquire_lock():
+    """Prevent two syncs (e.g. a leftover cron job and the timer) from overlapping."""
+    handle = open(LOCK_FILE, "w")
     try:
-        with open(log_file, 'r') as infile, open(temp_log, 'w') as outfile:
-            for line in infile:
-                # Parse the timestamp from the log line
-                # Format: "2024-11-24 15:30:45,123 [INFO] message"
-                try:
-                    timestamp_str = line.split(',')[0]
-                    log_time = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
-                    if log_time >= cutoff_time:
-                        outfile.write(line)
-                except (ValueError, IndexError):
-                    # If we can't parse the timestamp, keep the line
-                    outfile.write(line)
-
-        # Replace the old log with the cleaned version
-        temp_log.replace(log_file)
-        logging.debug("Cleaned up %s, keeping last %d days", log_name, retention_days)
-    except Exception as e:
-        logging.warning("Failed to cleanup %s: %s", log_name, e)
-        if temp_log.exists():
-            temp_log.unlink()
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        return None
+    return handle
 
 
 def load_drive_service(credentials_path: Path) -> "build":
@@ -168,7 +141,7 @@ def list_drive_files(service, folder_id: str) -> List[DriveFile]:
                 supportsAllDrives=True,
                 includeItemsFromAllDrives=True,
             )
-            .execute()
+            .execute(num_retries=API_RETRIES)
         )
         for item in response.get("files", []):
             modified_time = datetime.fromisoformat(
@@ -209,18 +182,29 @@ def _local_file_matches(
 
 
 def download_file(service, entry: DriveFile, destination: Path) -> None:
+    """Download into a hidden temp file, then rename into place.
+
+    The player ignores hidden files, so it never shows a half-downloaded file,
+    and a failed download never leaves a truncated file behind.
+    """
     logging.info("Downloading %s", entry.name)
-    request = service.files().get_media(fileId=entry.file_id)
     destination.parent.mkdir(parents=True, exist_ok=True)
-
-    with io.FileIO(destination, "wb") as fh:
-        downloader = MediaIoBaseDownload(fh, request)
-        done = False
-        while not done:
-            _, done = downloader.next_chunk()
-
-    # Preserve the server modified timestamp so we can skip re-download next time.
-    os.utime(destination, (time.time(), entry.modified_time.timestamp()))
+    partial = destination.with_name(f".{destination.name}.part")
+    request = service.files().get_media(fileId=entry.file_id)
+    try:
+        with open(partial, "wb") as fh:
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk(num_retries=API_RETRIES)
+            fh.flush()
+            os.fsync(fh.fileno())
+        # Preserve the server modified timestamp so we can skip re-download next time.
+        os.utime(partial, (time.time(), entry.modified_time.timestamp()))
+        os.replace(partial, destination)
+    finally:
+        if partial.exists():
+            partial.unlink()
 
 
 def log_to_spreadsheet(
@@ -252,7 +236,7 @@ def log_to_spreadsheet(
         try:
             worksheet = spreadsheet.worksheet("Sync Log")
         except gspread.exceptions.WorksheetNotFound:
-            worksheet = spreadsheet.add_worksheet(title="Sync Log", rows=1000, cols=7)
+            worksheet = spreadsheet.add_worksheet(title="Sync Log", rows=1000, cols=8)
             # Add headers
             worksheet.append_row([
                 "Timestamp",
@@ -261,7 +245,8 @@ def log_to_spreadsheet(
                 "Deleted",
                 "Total Synced",
                 "Errors",
-                "Status"
+                "Status",
+                "Host",
             ])
 
         # Add the log entry
@@ -275,7 +260,8 @@ def log_to_spreadsheet(
             deleted,
             total,
             errors,
-            status
+            status,
+            socket.gethostname(),
         ])
 
         logging.info("Logged sync results to Google Spreadsheet")
@@ -286,68 +272,78 @@ def log_to_spreadsheet(
         return False
 
 
-def sync_drive_folder(service, folder_id: str, media_dir: Path) -> tuple[List[Path], int, int, int]:
-    logging.info("=" * 60)
+def sync_drive_folder(
+    service, folder_id: str, media_dir: Path, allow_empty: bool = False
+) -> tuple[List[Path], int, int, int, int]:
+    """Mirror the Drive folder into media_dir.
+
+    Returns (synced_paths, downloaded, skipped, deleted, errors).
+    """
     logging.info("SYNC STARTED - Drive folder %s -> %s", folder_id, media_dir)
     media_dir.mkdir(parents=True, exist_ok=True)
-    file_metadata = {}
+    file_metadata: dict[str, float] = {}
     try:
         remote_files = list_drive_files(service, folder_id)
-        logging.info("Found %d files in Drive folder (excluding subfolders)", len(remote_files))
     except HttpError as error:
         logging.error("Google Drive API error: %s", error)
-        return [], 0, 0, 0
+        return [], 0, 0, 0, 1
 
-    # Build set of remote file names (excluding folders)
-    remote_file_names = {
-        entry.name for entry in remote_files
-        if entry.mime_type != "application/vnd.google-apps.folder"
-    }
+    # Only plain files can be downloaded: skip subfolders and native Google
+    # Docs/Sheets/Slides (mime types starting with application/vnd.google-apps).
+    downloadable = [e for e in remote_files if not e.mime_type.startswith("application/vnd.google-apps.")]
+    for entry in remote_files:
+        if entry.mime_type.startswith("application/vnd.google-apps."):
+            logging.debug("Skipping non-downloadable item: %s (%s)", entry.name, entry.mime_type)
+    logging.info("Found %d downloadable files in Drive folder", len(downloadable))
+    remote_file_names = {entry.name for entry in downloadable}
 
     synced_paths: List[Path] = []
-    downloaded_count = 0
-    skipped_count = 0
-    deleted_count = 0
+    downloaded_count = skipped_count = deleted_count = error_count = 0
 
-    for entry in remote_files:
-        if entry.mime_type == "application/vnd.google-apps.folder":
-            logging.debug("Skipping subfolder: %s", entry.name)
-            continue  # Skip nested folders for now.
-
+    for entry in downloadable:
         target_path = media_dir / entry.name
-        if not _local_file_matches(target_path, entry, file_metadata):
+        if _local_file_matches(target_path, entry, file_metadata):
+            skipped_count += 1
+            logging.debug("Skipped (up-to-date): %s", entry.name)
+        else:
             try:
                 download_file(service, entry, target_path)
                 downloaded_count += 1
-                logging.info("✓ Downloaded: %s", entry.name)
-            except HttpError as error:
-                logging.error("✗ Failed to download %s: %s", entry.name, error)
+                logging.info("Downloaded: %s", entry.name)
+            except (HttpError, OSError) as error:
+                error_count += 1
+                logging.error("Failed to download %s: %s", entry.name, error)
                 continue
-        else:
-            skipped_count += 1
-            logging.debug("⊘ Skipped (up-to-date): %s", entry.name)
-
         synced_paths.append(target_path)
 
-    # Delete local files that no longer exist on Google Drive
-    for local_file in media_dir.iterdir():
-        if local_file.is_file() and local_file.name not in remote_file_names:
-            try:
-                local_file.unlink()
-                deleted_count += 1
-                logging.info("✗ Deleted (removed from Drive): %s", local_file.name)
-            except OSError as error:
-                logging.error("✗ Failed to delete %s: %s", local_file.name, error)
+    # Delete local files that no longer exist on Google Drive. If Drive returns
+    # nothing at all (e.g. folder sharing was removed from the service account,
+    # which shows up as an empty listing rather than an error), keep what we
+    # have so the screens don't go blank. Set ALLOW_EMPTY_SYNC=true to allow it.
+    local_files = [p for p in media_dir.iterdir() if p.is_file()]
+    if not remote_file_names and local_files and not allow_empty:
+        logging.warning(
+            "Drive folder looks empty but %d local files exist; NOT deleting them. "
+            "Check the folder is still shared with the service account, or set ALLOW_EMPTY_SYNC=true.",
+            len(local_files),
+        )
+        error_count += 1
+    else:
+        for local_file in local_files:
+            if local_file.name not in remote_file_names:
+                try:
+                    local_file.unlink()
+                    deleted_count += 1
+                    logging.info("Deleted (removed from Drive): %s", local_file.name)
+                except OSError as error:
+                    error_count += 1
+                    logging.error("Failed to delete %s: %s", local_file.name, error)
 
-    logging.info("-" * 60)
-    logging.info("SYNC SUMMARY:")
-    logging.info("  Downloaded: %d files", downloaded_count)
-    logging.info("  Skipped (up-to-date): %d files", skipped_count)
-    logging.info("  Deleted: %d files", deleted_count)
-    logging.info("  Total synced: %d files", len(synced_paths))
-    logging.info("=" * 60)
-
-    return synced_paths, downloaded_count, skipped_count, deleted_count
+    logging.info(
+        "SYNC SUMMARY: downloaded=%d skipped=%d deleted=%d total=%d errors=%d",
+        downloaded_count, skipped_count, deleted_count, len(synced_paths), error_count,
+    )
+    return synced_paths, downloaded_count, skipped_count, deleted_count, error_count
 
 
 def parse_args() -> argparse.Namespace:
@@ -388,16 +384,10 @@ def parse_args() -> argparse.Namespace:
         help="Directory where log files are stored.",
     )
     parser.add_argument(
-        "--log-retention-days",
-        type=int,
-        default=int(os.environ.get("LOG_RETENTION_DAYS", DEFAULT_LOG_RETENTION_DAYS)),
-        help="Number of days to keep in the current log file (default: 3).",
-    )
-    parser.add_argument(
-        "--history-retention-days",
-        type=int,
-        default=int(os.environ.get("HISTORY_RETENTION_DAYS", DEFAULT_HISTORY_RETENTION_DAYS)),
-        help="Number of days to keep in the history log file (default: 90).",
+        "--allow-empty",
+        action="store_true",
+        default=os.environ.get("ALLOW_EMPTY_SYNC", "").lower() in ("1", "true", "yes"),
+        help="Allow deleting all local media when the Drive folder appears empty.",
     )
     return parser.parse_args()
 
@@ -414,30 +404,19 @@ def validate_config(folder_id: str, credentials_path: Path) -> None:
 def main() -> None:
     args = parse_args()
     validate_config(args.folder_id, args.credentials)
-
-    # Clean up old entries from logs BEFORE setting up logging
-    current_log = args.log_dir / "sync_current.log"
-    history_log = args.log_dir / "sync_history.log"
-    cleanup_log_file(current_log, args.log_retention_days, "current log")
-    cleanup_log_file(history_log, args.history_retention_days, "history log")
-
-    # Now configure logging (appends to cleaned logs)
     configure_logging(args.verbose, args.log_dir)
 
+    lock = acquire_lock()
+    if lock is None:
+        logging.info("Another sync is already running; skipping this run.")
+        return
+
     service = load_drive_service(args.credentials)
-    logging.info("Starting sync from Google Drive folder %s", args.folder_id)
-
-    synced_paths, downloaded, skipped, deleted = sync_drive_folder(
-        service, args.folder_id, args.media_dir
+    synced_paths, downloaded, skipped, deleted, errors = sync_drive_folder(
+        service, args.folder_id, args.media_dir, allow_empty=args.allow_empty
     )
-    if synced_paths:
-        logging.info("Successfully synced %d files to %s", len(synced_paths), args.media_dir)
-    else:
-        logging.warning("No files were synced.")
+    logging.info("Sync complete: %d files in %s", len(synced_paths), args.media_dir)
 
-    logging.info("Sync complete.")
-
-    # Log to Google Spreadsheet if configured
     if args.log_spreadsheet_id:
         log_to_spreadsheet(
             args.credentials,
@@ -446,7 +425,7 @@ def main() -> None:
             skipped,
             deleted,
             len(synced_paths),
-            errors=0  # Could track errors if needed
+            errors=errors,
         )
 
 

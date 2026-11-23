@@ -1,0 +1,6 @@
+# Python packages for gdrive_sync.py (installed into .venv by setup_pi.sh).
+# media_player.py uses only the standard library.
+google-api-python-client>=2.100
+google-auth>=2.20
+gspread>=6.0
+python-dotenv>=1.0

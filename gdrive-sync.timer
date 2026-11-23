@@ -1,14 +1,10 @@
 [Unit]
-Description=Google Drive media sync timer
-Requires=gdrive-sync.service
+Description=gdrive2video: run the Google Drive sync every 5 minutes
 
 [Timer]
-# Run on boot after 1 minute
-OnBootSec=1min
-# Run every 5 minutes
+OnBootSec=30s
 OnUnitActiveSec=5min
-# Run at a consistent time if missed
-Persistent=true
+AccuracySec=15s
 
 [Install]
 WantedBy=timers.target
