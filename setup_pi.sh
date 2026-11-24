@@ -15,6 +15,8 @@ FOLDER_ID=""
 SPREADSHEET_ID=""
 DO_UPGRADE=true
 KEEP_DESKTOP=false
+FORCE_HDMI=true
+HDMI_MODE="1920x1080@60"
 
 usage() {
   cat <<EOF
@@ -24,6 +26,10 @@ Usage: $0 [--folder-id ID] [--spreadsheet-id ID] [--no-upgrade] [--keep-desktop]
   --spreadsheet-id ID   Google Sheet for sync logging (optional).
   --no-upgrade          Skip 'apt full-upgrade' (faster re-runs).
   --keep-desktop        Don't switch the Pi to boot without the desktop.
+  --hdmi-mode MODE      Resolution forced on HDMI (default ${HDMI_MODE}), so the
+                        picture appears even if the TV was off at boot.
+  --no-force-hdmi       Use only what the TV reports (picture may stay blank if
+                        the TV was off when the Pi booted).
 
 Expects credentials.json (the Google service-account key) in ${PROJECT_DIR}.
 EOF
@@ -35,6 +41,8 @@ while [[ $# -gt 0 ]]; do
     --spreadsheet-id) SPREADSHEET_ID="${2:?missing value}"; shift 2 ;;
     --no-upgrade) DO_UPGRADE=false; shift ;;
     --keep-desktop) KEEP_DESKTOP=true; shift ;;
+    --hdmi-mode) HDMI_MODE="${2:?missing value}"; shift 2 ;;
+    --no-force-hdmi) FORCE_HDMI=false; shift ;;
     --framebuffer) shift ;;  # legacy flag, no longer needed
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
@@ -129,6 +137,11 @@ if ! ${KEEP_DESKTOP}; then
     for opt in consoleblank=0 vt.global_cursor_default=0 logo.nologo; do
       [[ " ${new} " == *" ${opt} "* ]] || new="${new} ${opt}"
     done
+    # Force HDMI on even if the TV is off/in standby when the Pi boots;
+    # otherwise the Pi decides no screen is attached and shows nothing.
+    if ${FORCE_HDMI} && [[ " ${new} " != *" video=HDMI-A-1:"* ]]; then
+      new="${new} video=HDMI-A-1:${HDMI_MODE}D"
+    fi
     if [[ "${new}" != "${line}" ]]; then
       sudo cp "${CMDLINE}" "${CMDLINE}.bak"
       echo "${new}" | sudo tee "${CMDLINE}" >/dev/null

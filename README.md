@@ -46,6 +46,7 @@ Google Drive folder ──(every 5 min)──▶ gdrive_sync.py ──▶ media/
 - `/etc/gdrive2video.env`: the folder ID, Sheet ID, credentials path and media folder.
 - The services `media-player.service` (always restarts) and `gdrive-sync.timer`. It also removes old cron sync entries.
 - Boots to the console with no desktop and no login prompt on the TV, and stops the screen from blanking.
+- Forces HDMI on at 1920×1080, so the picture appears even if the TV was off or in standby when the Pi booted. To change the resolution, use `--hdmi-mode 1280x720@60`. To turn this off, use `--no-force-hdmi`.
 - **Hardware watchdog**: if the Pi ever hangs, it reboots itself after about 15 seconds.
 - **Less SD-card wear**: the journal is capped at 50 MB, the swap file is off, sync logs rotate at 1 MB, and the player's temp files live in RAM.
 
@@ -76,7 +77,8 @@ Settings in `/etc/gdrive2video.env`:
 Start with `diagnose_pi.sh`, then check these:
 
 - **The TV shows the desktop or a login prompt.** The player isn't holding the screen. Run `./setup_pi.sh --no-upgrade` and reboot.
-- **The TV shows "no signal" or the wrong resolution.** Turn the TV on, set it to the right input, and run `sudo systemctl restart media-player`. The player uses the first connected HDMI port.
+- **The TV shows "no signal" or the wrong resolution.** Turn the TV on and set it to the right input. If it still shows nothing, re-run setup with a lower resolution, for example `--hdmi-mode 1280x720@60`, and reboot.
+- **mpv logs "Can't open TTY for VT control" or "dumb mode".** Both are harmless on a Pi 2.
 - **Things crash randomly** (Python or X segfaults, garbled config files). Check the *SD card health* section of `diagnose_pi.sh`. If reads of the same file differ, the SD card (or the card slot) is failing, and the only fix is a new card. This happened in Nov 2026. On a Pi 2, also suspect the Pi itself.
 - **`throttled=0x50005` (or anything other than `0x0`).** The power supply is too weak. Use the official 2.5 A / 3 A supply. Under-voltage also corrupts SD cards.
 - **New files don't appear.** Check that the Drive folder is still shared with the service account email (in `credentials.json`, `client_email`). Then check `journalctl -u gdrive-sync`.

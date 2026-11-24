@@ -29,7 +29,8 @@ MODE="${1:-copy}"
 [[ -f "${CREDENTIALS}" ]] || { echo "Credentials file not found: ${CREDENTIALS}" >&2; exit 1; }
 
 # Share one SSH connection for all steps, so a password is asked only once.
-CONTROL="${TMPDIR:-/tmp}/gdrive2video-ssh-%C"
+# Keep the socket path short: macOS's $TMPDIR is too long for SSH's 104-byte limit.
+CONTROL="${HOME}/.ssh/gd2v-%C"
 SSH=(ssh -o ControlMaster=auto -o "ControlPath=${CONTROL}" -o ControlPersist=120 -o ConnectTimeout=10 "${RPI_USER}@${RPI_HOST}")
 
 echo "=== Target: ${RPI_USER}@${RPI_HOST}:${RPI_DIR} ==="
