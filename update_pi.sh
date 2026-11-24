@@ -56,8 +56,8 @@ if ! python3 -m py_compile "${TMP}/media_player.py" "${TMP}/gdrive_sync.py" ||
   exit 1
 fi
 
-git checkout -q -B "${BRANCH}" "${NEW}"
-git reset -q --hard "${NEW}"
+# -f: replace tracked code files even if a copied-in version is in the way.
+git checkout -q -f -B "${BRANCH}" "${NEW}"
 chmod +x ./*.sh ./*.py
 
 echo
