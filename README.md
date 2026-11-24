@@ -11,6 +11,7 @@ Google Drive folder ──(every 5 min)──▶ gdrive_sync.py ──▶ media/
 | `gdrive_sync.py` | Mirrors the Drive folder into the local `media/` folder. It's run every 5 minutes by `gdrive-sync.timer`. It can also log each run to a Google Sheet. |
 | `media_player.py` | Keeps one fullscreen `mpv` running, looping all images (8 s each) and then all videos. It reloads when `media/` changes. |
 | `setup_pi.sh` | Run **on the Pi**. It installs or updates everything and applies the reliability settings below. It's safe to re-run. |
+| `update_pi.sh` | Run **on the Pi** when you want to update. It pulls the latest code from GitHub and applies it. |
 | `deploy_to_rpi.sh` | Run **on your Mac**. It copies the project and credentials to the Pi, and with `--setup` it also runs setup there. |
 | `diagnose_pi.sh` | Health check on the Pi: services, logs, display, power and an SD-card read test. |
 | `*.service`, `*.timer` | systemd unit templates. `setup_pi.sh` fills in the user and path. |
@@ -38,7 +39,19 @@ Google Drive folder ──(every 5 min)──▶ gdrive_sync.py ──▶ media/
    This takes 10–30 minutes the first time on a Pi 2 (OS updates and Python packages).
 4. Reboot when it asks (`ssh rpi-video.local sudo reboot`). The TV should show the slideshow about 1 minute after boot.
 
-**To update code later**, run `./deploy_to_rpi.sh` for code only, or `./deploy_to_rpi.sh --setup` to also patch the OS.
+### Updating the code later
+Push your changes to `main` on GitHub. Then run the update on each Pi whenever you're ready. Nothing updates automatically.
+```bash
+ssh srisai@<pi-address> ~/gdrive2video/update_pi.sh   # from any computer on the Pi's network
+```
+The update script:
+- pulls the latest `main`
+- refuses to switch if the new code fails basic checks, so the screens keep the current version
+- re-applies the services and settings, then restarts the player
+
+`update_pi.sh BRANCH` tests another branch, and `--force` re-applies even if nothing changed. The Pi's own files are never touched: credentials, media, logs and `/etc/gdrive2video.env`.
+
+From a Mac on the same network, `./deploy_to_rpi.sh` still works too. It copies the code from your local checkout instead of GitHub.
 
 ### What `setup_pi.sh` configures
 - OS patches (`apt full-upgrade`) and automatic Debian security updates (`unattended-upgrades`).
@@ -54,6 +67,7 @@ Google Drive folder ──(every 5 min)──▶ gdrive_sync.py ──▶ media/
 
 | Task | Command (on the Pi) |
 |---|---|
+| Update to latest code | `~/gdrive2video/update_pi.sh` |
 | Health check | `~/gdrive2video/diagnose_pi.sh`, or from the Mac `./deploy_to_rpi.sh --diagnose` |
 | Player status and logs | `systemctl status media-player` / `journalctl -u media-player -f` |
 | Sync logs | `journalctl -u gdrive-sync -f`, or `logs/sync.log` |

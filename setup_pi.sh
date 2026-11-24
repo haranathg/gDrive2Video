@@ -85,7 +85,7 @@ if ${DO_UPGRADE}; then
   if [[ -f /var/run/reboot-required ]]; then REBOOT_NEEDED=true; fi
 fi
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  mpv python3-venv python3-pip ca-certificates unattended-upgrades
+  mpv git python3-venv python3-pip ca-certificates unattended-upgrades
 sudo apt-get -y autoremove
 
 step "Installing Python packages into ${PROJECT_DIR}/.venv"
