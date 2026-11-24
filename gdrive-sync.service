@@ -1,17 +1,17 @@
+# Installed by setup_pi.sh, which replaces @USER@ and @PROJECT_DIR@.
 [Unit]
-Description=Google Drive media sync service
-After=network-online.target remote-fs.target
+Description=gdrive2video: sync media from Google Drive
+After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=pi
-Group=pi
-EnvironmentFile=/etc/gdrive2video.env
-WorkingDirectory=%h/gdrive2video
-ExecStart=/usr/bin/python3 %h/gdrive2video/gdrive_sync.py
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
+User=@USER@
+Group=@USER@
+EnvironmentFile=-/etc/gdrive2video.env
+WorkingDirectory=@PROJECT_DIR@
+ExecStart=@PROJECT_DIR@/.venv/bin/python @PROJECT_DIR@/gdrive_sync.py
+TimeoutStartSec=30min
+# Stay out of the player's way.
+Nice=10
+IOSchedulingClass=idle

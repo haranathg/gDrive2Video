@@ -1,111 +1,60 @@
 #!/usr/bin/env bash
+# Copy this project to the Pi and (optionally) run setup there.
+#
+#   ./deploy_to_rpi.sh            # copy code + credentials only
+#   ./deploy_to_rpi.sh --setup    # copy, then run setup_pi.sh on the Pi
+#   ./deploy_to_rpi.sh --diagnose # run diagnose_pi.sh on the Pi
+#
+# Reads RPI_USER / RPI_HOST / RPI_DIR, GDRIVE_FOLDER_ID, LOG_SPREADSHEET_ID and
+# CREDENTIALS_PATH from .env. Uses normal SSH: add your key once with
+# `ssh-copy-id USER@HOST` to avoid password prompts (otherwise you are asked
+# once per run).
 set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
 
-# Load configuration from .env file
-if [ -f .env ]; then
-    export $(grep -v '^#' .env | grep -E '^RPI_' | xargs)
+env_value() { [[ -f .env ]] && sed -n "s/^$1=//p" .env | tail -n1 || true; }
+
+RPI_USER="${RPI_USER:-$(env_value RPI_USER)}"
+RPI_HOST="${RPI_HOST:-$(env_value RPI_HOST)}"
+RPI_USER="${RPI_USER:-pi}"
+RPI_DIR="${RPI_DIR:-$(env_value RPI_DIR)}"
+RPI_DIR="${RPI_DIR:-/home/${RPI_USER}/gdrive2video}"
+CREDENTIALS="$(env_value CREDENTIALS_PATH)"
+CREDENTIALS="${CREDENTIALS:-credentials.json}"
+FOLDER_ID="$(env_value GDRIVE_FOLDER_ID)"
+SPREADSHEET_ID="$(env_value LOG_SPREADSHEET_ID)"
+
+MODE="${1:-copy}"
+[[ -n "${RPI_HOST}" ]] || { echo "Set RPI_HOST in .env (the Pi's IP or hostname, e.g. rpi-video.local)." >&2; exit 1; }
+[[ -f "${CREDENTIALS}" ]] || { echo "Credentials file not found: ${CREDENTIALS}" >&2; exit 1; }
+
+# Share one SSH connection for all steps, so a password is asked only once.
+# Keep the socket path short: macOS's $TMPDIR is too long for SSH's 104-byte limit.
+CONTROL="${HOME}/.ssh/gd2v-%C"
+SSH=(ssh -o ControlMaster=auto -o "ControlPath=${CONTROL}" -o ControlPersist=120 -o ConnectTimeout=10 "${RPI_USER}@${RPI_HOST}")
+
+echo "=== Target: ${RPI_USER}@${RPI_HOST}:${RPI_DIR} ==="
+
+if [[ "${MODE}" == "--diagnose" ]]; then
+  "${SSH[@]}" -t "bash ${RPI_DIR}/diagnose_pi.sh"
+  exit
 fi
 
-# Configuration
-RPI_USER="${RPI_USER:-srisai}"
-RPI_HOST="${RPI_HOST:-192.168.86.23}"
-RPI_PASSWORD="${RPI_PASSWORD:-srisai}"
-PROJECT_NAME="gdrive2video"
-REMOTE_DIR="/home/${RPI_USER}/${PROJECT_NAME}"
+echo "Copying project files (tracked by git)..."
+git ls-files -z | COPYFILE_DISABLE=1 tar --null -T - -czf - | "${SSH[@]}" "mkdir -p '${RPI_DIR}' && tar xzf - -C '${RPI_DIR}'"
 
-echo "=== Deploying gdrive2video to Raspberry Pi ==="
-echo "Target: ${RPI_USER}@${RPI_HOST}"
-echo ""
+echo "Copying credentials..."
+"${SSH[@]}" "umask 077 && cat > '${RPI_DIR}/credentials.json'" < "${CREDENTIALS}"
 
-# Check if expect is installed
-if ! command -v expect &> /dev/null; then
-    echo "Error: 'expect' is not installed."
-    echo "Please install it with: brew install expect"
-    exit 1
-fi
-
-# Create temporary expect script for SSH commands
-create_expect_ssh() {
-    local command="$1"
-    cat > /tmp/ssh_expect.exp <<EOF
-#!/usr/bin/expect -f
-set timeout 30
-spawn ssh -o StrictHostKeyChecking=no ${RPI_USER}@${RPI_HOST} "$command"
-expect {
-    "password:" {
-        send "${RPI_PASSWORD}\r"
-        expect eof
-    }
-    eof
-}
-EOF
-    chmod +x /tmp/ssh_expect.exp
-    /tmp/ssh_expect.exp
-    rm /tmp/ssh_expect.exp
-}
-
-# Create temporary expect script for SCP
-create_expect_scp() {
-    local source="$1"
-    local dest="$2"
-    cat > /tmp/scp_expect.exp <<EOF
-#!/usr/bin/expect -f
-set timeout 60
-spawn scp -o StrictHostKeyChecking=no -r "$source" "${RPI_USER}@${RPI_HOST}:$dest"
-expect {
-    "password:" {
-        send "${RPI_PASSWORD}\r"
-        expect eof
-    }
-    eof
-}
-EOF
-    chmod +x /tmp/scp_expect.exp
-    /tmp/scp_expect.exp
-    rm /tmp/scp_expect.exp
-}
-
-echo "Step 1: Testing connection..."
-create_expect_ssh "echo 'Connection successful' && uname -a"
-
-echo ""
-echo "Step 2: Creating remote directory..."
-create_expect_ssh "mkdir -p ${REMOTE_DIR}"
-
-echo ""
-echo "Step 3: Copying project files..."
-# Copy all files except those in .gitignore
-create_expect_scp "gdrive_sync.py" "${REMOTE_DIR}/"
-create_expect_scp "media_player.py" "${REMOTE_DIR}/"
-create_expect_scp "gdrive-sync.service" "${REMOTE_DIR}/"
-create_expect_scp "gdrive-sync.timer" "${REMOTE_DIR}/"
-create_expect_scp "media-player.service" "${REMOTE_DIR}/"
-create_expect_scp "setup_pi.sh" "${REMOTE_DIR}/"
-create_expect_scp "README.md" "${REMOTE_DIR}/"
-
-echo ""
-echo "Step 4: Copying credentials file..."
-if [ -f "gdrive2video-access-key.json" ]; then
-    create_expect_scp "gdrive2video-access-key.json" "${REMOTE_DIR}/credentials.json"
-    echo "Credentials copied as credentials.json"
-elif [ -f "credentials.json" ]; then
-    create_expect_scp "credentials.json" "${REMOTE_DIR}/credentials.json"
-    echo "Credentials copied"
+if [[ "${MODE}" == "--setup" ]]; then
+  echo "Running setup on the Pi (this can take a while on first run)..."
+  args=()
+  [[ -n "${FOLDER_ID}" ]] && args+=(--folder-id "${FOLDER_ID}")
+  [[ -n "${SPREADSHEET_ID}" ]] && args+=(--spreadsheet-id "${SPREADSHEET_ID}")
+  "${SSH[@]}" -t "cd '${RPI_DIR}' && ./setup_pi.sh ${args[*]:-}"
 else
-    echo "Warning: No credentials file found. You'll need to copy it manually."
+  echo "Restarting services (if installed)..."
+  "${SSH[@]}" "sudo systemctl daemon-reload; sudo systemctl try-restart media-player.service" || true
 fi
 
-echo ""
-echo "Step 5: Setting permissions..."
-create_expect_ssh "chmod +x ${REMOTE_DIR}/setup_pi.sh ${REMOTE_DIR}/gdrive_sync.py ${REMOTE_DIR}/media_player.py"
-
-echo ""
-echo "=== Deployment Complete ==="
-echo ""
-echo "Next steps:"
-echo "1. SSH into the Pi: ssh ${RPI_USER}@${RPI_HOST}"
-echo "2. Navigate to: cd ${REMOTE_DIR}"
-echo "3. Run setup: ./setup_pi.sh --folder-id YOUR_FOLDER_ID --framebuffer"
-echo ""
-echo "To SSH directly, run:"
-echo "  ssh ${RPI_USER}@${RPI_HOST}"
+echo "=== Done ==="
