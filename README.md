@@ -16,6 +16,8 @@ Google Drive folder ──(every 5 min)──▶ gdrive_sync.py ──▶ media/
 | `diagnose_pi.sh` | Health check on the Pi: services, logs, display, power and an SD-card read test. |
 | `*.service`, `*.timer` | systemd unit templates. `setup_pi.sh` fills in the user and path. |
 
+See [docs/DEVICE_NOTES.md](docs/DEVICE_NOTES.md) for the deployed device, open items and incident history.
+
 **There's no desktop.** The Pi boots straight to the player, and mpv draws directly to the screen through DRM/KMS. An earlier version ran on the LXDE desktop, so when the desktop's X server broke, the TVs just showed the desktop.
 
 ## Setting up a Pi (new SD card)
